@@ -1,0 +1,225 @@
+name: 发布盘一盘 Test 插件
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".release-request"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: panyipan-test-release
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: Gandalf-z/panyipan
+  TEST_ENDPOINT: https://panyipan-api.gandaofu.xyz
+
+jobs:
+  publish:
+    name: 构建并发布 Test Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检查上游只读凭据
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ secrets.PANYIPAN_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SOURCE_TOKEN:-}" ]]; then
+            echo "::error::缺少 PANYIPAN_SOURCE_TOKEN。请在本仓库 Actions Secret 中配置仅可读取 Gandalf-z/panyipan 的 fine-grained token。"
+            exit 1
+          fi
+
+      - name: 读取上游 main
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ secrets.PANYIPAN_SOURCE_TOKEN }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 准备 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 校验上游 Plugin
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_version_consistency.py
+          python3 scripts/check_plugin_build.py
+          node scripts/run_plugin_node_tests.js
+
+      - name: 构建 Test 三文件包
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/build_plugin_release.py \
+            --output "$RUNNER_TEMP/panyipan-dist" \
+            --environment test
+
+      - name: 准备并验证 BRAT Release 资产
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          base_version="$(tr -d '[:space:]' < source/VERSION)"
+          commit_count="$(git -C source rev-list --count HEAD)"
+          source_sha="$(git -C source rev-parse HEAD)"
+          source_short="${source_sha:0:12}"
+          tag="${base_version}-test.${commit_count}"
+          archive="$RUNNER_TEMP/panyipan-dist/panyipan-plugin-${base_version}-test.zip"
+          assets="$RUNNER_TEMP/panyipan-assets"
+
+          test -f "$archive"
+          rm -rf "$assets"
+          mkdir -p "$assets"
+          unzip -q "$archive" -d "$assets"
+
+          python3 - "$assets/manifest.json" "$tag" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          tag = sys.argv[2]
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          if manifest.get("id") != "panyipan":
+              raise SystemExit("manifest.id 必须为 panyipan")
+          manifest["version"] = tag
+          path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          python3 - "$assets" "$tag" "$TEST_ENDPOINT" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          tag = sys.argv[2]
+          endpoint = sys.argv[3]
+          expected = {"main.js", "manifest.json", "styles.css"}
+          actual = {p.name for p in root.iterdir() if p.is_file()}
+          if actual != expected:
+              raise SystemExit(f"Release 三文件白名单失败：{sorted(actual)}")
+
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          if manifest.get("version") != tag:
+              raise SystemExit("manifest.version 与 Release tag 不一致")
+          if manifest.get("id") != "panyipan":
+              raise SystemExit("manifest.id 不正确")
+
+          main = (root / "main.js").read_text(encoding="utf-8")
+          required = (
+              'const DISTRIBUTION_ENVIRONMENT = "test";',
+              f'const LOCKED_PUBLIC_MARKET_ENDPOINT = "{endpoint}";',
+          )
+          for marker in required:
+              if main.count(marker) != 1:
+                  raise SystemExit(f"Test distribution marker 缺失或不唯一：{marker}")
+
+          forbidden = (
+              'const DISTRIBUTION_ENVIRONMENT = "dev";',
+              'const DISTRIBUTION_ENVIRONMENT = "prod";',
+              'const LOCKED_PUBLIC_MARKET_ENDPOINT = "http://127.0.0.1',
+              'const LOCKED_PUBLIC_MARKET_ENDPOINT = "http://localhost',
+          )
+          for marker in forbidden:
+              if marker in main:
+                  raise SystemExit(f"检测到错误发行标记：{marker}")
+
+          absolute_path_patterns = (
+              r"/Users/[^/\s]+/",
+              r"/home/[^/\s]+/",
+              r"[A-Za-z]:\\Users\\[^\\\s]+\\",
+          )
+          joined = "\n".join((main, (root / "styles.css").read_text(encoding="utf-8")))
+          for pattern in absolute_path_patterns:
+              if re.search(pattern, joined):
+                  raise SystemExit("检测到本机绝对路径")
+          PY
+
+          node --check "$assets/main.js"
+
+          backup_zip="$RUNNER_TEMP/panyipan-plugin-${tag}.zip"
+          (
+            cd "$assets"
+            zip -q -9 "$backup_zip" main.js manifest.json styles.css
+          )
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            exists=true
+          else
+            exists=false
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "source_sha=$source_sha"
+            echo "source_short=$source_short"
+            echo "assets=$assets"
+            echo "backup_zip=$backup_zip"
+            echo "exists=$exists"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Test Release: $tag"
+          echo "Source: $source_short"
+          echo "Assets: main.js / manifest.json / styles.css"
+
+      - name: 发布 GitHub Release
+        if: steps.release.outputs.exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHORT: ${{ steps.release.outputs.source_short }}
+          ASSETS: ${{ steps.release.outputs.assets }}
+          BACKUP_ZIP: ${{ steps.release.outputs.backup_zip }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes" <<EOF
+          ## 盘一盘 Test Release
+
+          本版本用于当前小范围外部体验，安装与更新请优先使用 BRAT。
+
+          - 运行通道：Test
+          - 上游构建：\`$SOURCE_SHORT\`
+          - 安装仓库：\`Gandalf-z/panyipan-plugin-release\`
+
+          BRAT 会直接读取本 Release 中的 \`main.js\`、\`manifest.json\`、\`styles.css\`。ZIP 仅作为故障备用下载。
+          EOF
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file "$notes" \
+            --prerelease \
+            "$ASSETS/main.js" \
+            "$ASSETS/manifest.json" \
+            "$ASSETS/styles.css" \
+            "$BACKUP_ZIP"
+
+      - name: 已存在时安全跳过
+        if: steps.release.outputs.exists == 'true'
+        run: echo "${{ steps.release.outputs.tag }} 已发布；同一上游提交不会重复创建 Release。"

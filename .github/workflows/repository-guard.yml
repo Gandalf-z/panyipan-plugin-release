@@ -1,0 +1,42 @@
+name: 分发仓库边界检查
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 禁止把插件构建物和源码提交到默认分支
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=0
+          while IFS= read -r file; do
+            case "$file" in
+              README.md|AGENTS.md|SECURITY.md|LICENSE|.gitignore|.release-request|.github/*)
+                ;;
+              *)
+                echo "::error file=$file::公开分发仓库不应跟踪该文件；插件三文件应只存在于 GitHub Release 资产中。"
+                bad=1
+                ;;
+            esac
+          done < <(git ls-files)
+          exit "$bad"
+
+      - name: 检查明显凭据泄漏
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE -- '-----BEGIN ([A-Z ]+ )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}' -- ':!*.md'; then
+            echo "::error::检测到疑似真实凭据；公开分发仓库禁止提交 Secret。"
+            exit 1
+          fi
+          echo "未发现明显凭据内容。"
