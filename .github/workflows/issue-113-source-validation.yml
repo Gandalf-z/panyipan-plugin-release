@@ -1,0 +1,94 @@
+name: Issue 113 私有源码验证
+
+on:
+  push:
+    branches:
+      - chatgpt/issue-113-test-channel-manifest
+    paths:
+      - ".github/workflows/issue-113-source-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: 检查上游只读凭据
+        env:
+          SOURCE_TOKEN: ${{ secrets.PANYIPAN_SOURCE_TOKEN }}
+        run: |
+          test -n "${SOURCE_TOKEN:-}" || { echo "::error::缺少 PANYIPAN_SOURCE_TOKEN"; exit 1; }
+
+      - name: 读取 Issue 113 私有源码分支
+        uses: actions/checkout@v4
+        with:
+          repository: Gandalf-z/panyipan
+          ref: chatgpt/issue-113-test-one-click-update
+          token: ${{ secrets.PANYIPAN_SOURCE_TOKEN }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安装 Backend 测试依赖
+        working-directory: source
+        run: python -m pip install -r server/panyipan-backend/requirements-dev.txt
+
+      - name: 检查受控 Plugin 基线
+        working-directory: source
+        run: |
+          python scripts/check_plugin_build.py
+          python scripts/check_version_consistency.py
+          node --check panyipan-plugin/src/services/test-plugin-update-service.js
+          node --check tests/node_test_plugin_update.test.js
+
+      - name: 运行客户端 Test 更新事务测试
+        working-directory: source
+        run: node --test tests/node_test_plugin_update.test.js
+
+      - name: 运行 Backend 更新代理与发行隔离测试
+        working-directory: source
+        run: python -m pytest -q server/panyipan-backend/tests/test_plugin_updates.py tests/test_plugin_update_distribution.py
+
+      - name: 构建 Test 与 Prod 并验证物理隔离
+        working-directory: source
+        run: |
+          rm -rf "$RUNNER_TEMP/panyipan-test" "$RUNNER_TEMP/panyipan-prod"
+          python scripts/build_plugin_release.py --environment test --output "$RUNNER_TEMP/panyipan-test"
+          python scripts/build_plugin_release.py --environment prod --output "$RUNNER_TEMP/panyipan-prod"
+          python - "$RUNNER_TEMP/panyipan-test" "$RUNNER_TEMP/panyipan-prod" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          test_zip = next(pathlib.Path(sys.argv[1]).glob("*.zip"))
+          prod_zip = next(pathlib.Path(sys.argv[2]).glob("*.zip"))
+          with zipfile.ZipFile(test_zip) as archive:
+              test_main = archive.read("main.js").decode("utf-8")
+          with zipfile.ZipFile(prod_zip) as archive:
+              prod_main = archive.read("main.js").decode("utf-8")
+          assert 'const DISTRIBUTION_ENVIRONMENT = "test";' in test_main
+          assert "PanyipanTestUpdater" in test_main
+          assert "/v1/plugin/test/" in test_main
+          assert "版本与更新" in test_main
+          assert "市场自动刷新" in test_main
+          assert 'const DISTRIBUTION_ENVIRONMENT = "prod";' in prod_main
+          assert "PanyipanTestUpdater" not in prod_main
+          assert "/v1/plugin/test/" not in prod_main
+          assert "TEST_UPDATE_" not in prod_main
+          assert "<panyipan:test-updater-" not in prod_main
+          print("Issue #113 Test / Prod distribution isolation PASS")
+          PY
+
+      - name: 基础文本检查
+        working-directory: source
+        run: git diff --check HEAD~0
