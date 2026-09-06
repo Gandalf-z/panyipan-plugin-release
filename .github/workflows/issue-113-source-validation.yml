@@ -55,16 +55,29 @@ jobs:
         working-directory: source
         run: node --test tests/node_test_plugin_update.test.js
 
+      - name: 运行完整 Plugin Node 回归
+        working-directory: source
+        run: node scripts/run_plugin_node_tests.js
+
       - name: 运行 Backend 更新代理与发行隔离测试
         working-directory: source
         run: python -m pytest -q server/panyipan-backend/tests/test_plugin_updates.py tests/test_plugin_update_distribution_contract.py
 
+      - name: 运行 Backend 现有测试集
+        working-directory: source
+        run: python -m pytest -q server/panyipan-backend/tests
+
       - name: 构建 Test 与 Prod 并验证物理隔离
         working-directory: source
         run: |
-          rm -rf "$RUNNER_TEMP/panyipan-test" "$RUNNER_TEMP/panyipan-prod"
+          rm -rf "$RUNNER_TEMP/panyipan-test" "$RUNNER_TEMP/panyipan-prod" "$RUNNER_TEMP/panyipan-test-unzip" "$RUNNER_TEMP/panyipan-prod-unzip"
           python scripts/build_plugin_release.py --environment test --output "$RUNNER_TEMP/panyipan-test"
           python scripts/build_plugin_release.py --environment prod --output "$RUNNER_TEMP/panyipan-prod"
+          mkdir -p "$RUNNER_TEMP/panyipan-test-unzip" "$RUNNER_TEMP/panyipan-prod-unzip"
+          unzip -q "$RUNNER_TEMP/panyipan-test"/*.zip -d "$RUNNER_TEMP/panyipan-test-unzip"
+          unzip -q "$RUNNER_TEMP/panyipan-prod"/*.zip -d "$RUNNER_TEMP/panyipan-prod-unzip"
+          node --check "$RUNNER_TEMP/panyipan-test-unzip/main.js"
+          node --check "$RUNNER_TEMP/panyipan-prod-unzip/main.js"
           python - "$RUNNER_TEMP/panyipan-test" "$RUNNER_TEMP/panyipan-prod" <<'PY'
           import pathlib
           import sys
@@ -73,8 +86,10 @@ jobs:
           test_zip = next(pathlib.Path(sys.argv[1]).glob("*.zip"))
           prod_zip = next(pathlib.Path(sys.argv[2]).glob("*.zip"))
           with zipfile.ZipFile(test_zip) as archive:
+              assert set(archive.namelist()) == {"main.js", "manifest.json", "styles.css"}
               test_main = archive.read("main.js").decode("utf-8")
           with zipfile.ZipFile(prod_zip) as archive:
+              assert set(archive.namelist()) == {"main.js", "manifest.json", "styles.css"}
               prod_main = archive.read("main.js").decode("utf-8")
           assert 'const DISTRIBUTION_ENVIRONMENT = "test";' in test_main
           assert "PanyipanTestUpdater" in test_main
