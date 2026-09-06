@@ -2,6 +2,11 @@ name: 发布盘一盘 Test 插件
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "可选：指定 Gandalf-z/panyipan 的精确提交 SHA；留空则发布 main"
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -43,11 +48,39 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: 读取上游 main
+      - name: 解析精确上游提交
+        id: source_ref
+        shell: bash
+        env:
+          DISPATCH_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          source_ref="main"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            requested="$(sed -n 's/^source_sha=//p' distribution/.release-request | head -n 1 | tr -d '[:space:]')"
+            if [[ ! "$requested" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::.release-request 必须包含 source_sha=<40位提交SHA>"
+              exit 1
+            fi
+            source_ref="$requested"
+          elif [[ -n "${DISPATCH_SOURCE_SHA:-}" ]]; then
+            requested="$(printf '%s' "$DISPATCH_SOURCE_SHA" | tr -d '[:space:]')"
+            if [[ ! "$requested" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::workflow_dispatch source_sha 必须是 40 位提交 SHA"
+              exit 1
+            fi
+            source_ref="$requested"
+          fi
+
+          echo "ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "上游 ref: $source_ref"
+
+      - name: 读取上游源码
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
-          ref: main
+          ref: ${{ steps.source_ref.outputs.ref }}
           token: ${{ secrets.PANYIPAN_SOURCE_TOKEN }}
           path: source
           persist-credentials: false
