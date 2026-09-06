@@ -21,7 +21,7 @@ jobs:
           bad=0
           while IFS= read -r file; do
             case "$file" in
-              README.md|AGENTS.md|SECURITY.md|LICENSE|.gitignore|.release-request|.github/*)
+              README.md|AGENTS.md|SECURITY.md|LICENSE|.gitignore|.release-request|latest-test.json|.github/*)
                 ;;
               *)
                 echo "::error file=$file::公开分发仓库不应跟踪该文件；插件三文件应只存在于 GitHub Release 资产中。"
@@ -30,6 +30,34 @@ jobs:
             esac
           done < <(git ls-files)
           exit "$bad"
+
+      - name: 检查 Test 通道元数据边界
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f latest-test.json ]]; then
+            echo "latest-test.json 尚未生成；首次 Test Release 后由发布工作流创建。"
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+
+          payload = json.loads(pathlib.Path("latest-test.json").read_text(encoding="utf-8"))
+          if payload.get("schema_version") != 1 or payload.get("channel") != "test":
+              raise SystemExit("latest-test.json 通道契约无效")
+          assets = payload.get("assets") or {}
+          if set(assets) != {"main.js", "manifest.json", "styles.css"}:
+              raise SystemExit("latest-test.json 只能声明三文件资产")
+          for name, item in assets.items():
+              if not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", ""))):
+                  raise SystemExit(f"{name} sha256 无效")
+              url = str(item.get("url", ""))
+              prefix = "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/"
+              if not url.startswith(prefix) or not url.endswith(f"/{name}"):
+                  raise SystemExit(f"{name} 上游地址越界")
+          PY
 
       - name: 检查明显凭据泄漏
         shell: bash
