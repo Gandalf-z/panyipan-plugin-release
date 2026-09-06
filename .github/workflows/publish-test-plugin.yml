@@ -36,6 +36,13 @@ jobs:
             exit 1
           fi
 
+      - name: 读取分发仓库
+        uses: actions/checkout@v4
+        with:
+          path: distribution
+          persist-credentials: true
+          fetch-depth: 0
+
       - name: 读取上游 main
         uses: actions/checkout@v4
         with:
@@ -201,13 +208,13 @@ jobs:
           cat > "$notes" <<EOF
           ## 盘一盘 Test Release
 
-          本版本用于当前小范围外部体验，安装与更新请优先使用 BRAT。
+          本版本用于当前小范围外部体验。普通测试用户由盘一盘内置 Test 更新通道检查更新；BRAT 保留为高级测试与故障备用方式。
 
           - 运行通道：Test
           - 上游构建：\`$SOURCE_SHORT\`
           - 安装仓库：\`Gandalf-z/panyipan-plugin-release\`
 
-          BRAT 会直接读取本 Release 中的 \`main.js\`、\`manifest.json\`、\`styles.css\`。ZIP 仅作为故障备用下载。
+          Release 中的 \`main.js\`、\`manifest.json\`、\`styles.css\` 是唯一程序资产；ZIP 仅作为故障备用下载。
           EOF
 
           gh release create "$TAG" \
@@ -220,6 +227,60 @@ jobs:
             "$ASSETS/styles.css" \
             "$BACKUP_ZIP"
 
-      - name: 已存在时安全跳过
+      - name: 已存在时安全跳过 Release 创建
         if: steps.release.outputs.exists == 'true'
         run: echo "${{ steps.release.outputs.tag }} 已发布；同一上游提交不会重复创建 Release。"
+
+      - name: 生成 Test 更新通道清单
+        shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          ASSETS: ${{ steps.release.outputs.assets }}
+        run: |
+          set -euo pipefail
+          python3 - "$ASSETS" "$TAG" "$SOURCE_SHA" "$GITHUB_REPOSITORY" "distribution/latest-test.json" <<'PY'
+          import datetime
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          assets = pathlib.Path(sys.argv[1])
+          tag = sys.argv[2]
+          source_sha = sys.argv[3]
+          repository = sys.argv[4]
+          output = pathlib.Path(sys.argv[5])
+          names = ("main.js", "manifest.json", "styles.css")
+          payload = {
+              "schema_version": 1,
+              "channel": "test",
+              "version": tag,
+              "source_sha": source_sha,
+              "published_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "assets": {},
+          }
+          for name in names:
+              path = assets / name
+              content = path.read_bytes()
+              payload["assets"][name] = {
+                  "sha256": hashlib.sha256(content).hexdigest(),
+                  "size": len(content),
+                  "url": f"https://github.com/{repository}/releases/download/{tag}/{name}",
+              }
+          output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: 发布稳定 Test 通道指针
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C distribution config user.name "github-actions[bot]"
+          git -C distribution config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C distribution add latest-test.json
+          if git -C distribution diff --cached --quiet; then
+            echo "latest-test.json 无变化"
+            exit 0
+          fi
+          git -C distribution commit -m "chore(release): 更新 Test 通道指针 ${{ steps.release.outputs.tag }}"
+          git -C distribution push origin HEAD:main
