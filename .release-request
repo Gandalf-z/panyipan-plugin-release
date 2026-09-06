@@ -1,1 +1,3 @@
-publish test release B from upstream main f873c33b58ee00ccce3ea08a13eb6732463255a3
+source_sha=c41afcb3a5dc747262657f1279fd4c5a828ae530
+expected_version=1.23.0-test.819
+request_id=1788705970269553000
