@@ -57,7 +57,7 @@ jobs:
 
       - name: 运行 Backend 更新代理与发行隔离测试
         working-directory: source
-        run: python -m pytest -q server/panyipan-backend/tests/test_plugin_updates.py tests/test_plugin_update_distribution.py
+        run: python -m pytest -q server/panyipan-backend/tests/test_plugin_updates.py tests/test_plugin_update_distribution_contract.py
 
       - name: 构建 Test 与 Prod 并验证物理隔离
         working-directory: source
