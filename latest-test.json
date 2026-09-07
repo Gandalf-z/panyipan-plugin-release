@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "channel": "test",
-  "version": "1.23.0-test.928",
-  "source_sha": "184d53eefa7209595f739be2216f8815b2fcfea6",
-  "published_at": "2026-09-07T02:50:40Z",
+  "version": "1.23.0-test.976",
+  "source_sha": "cfaba01bb09a7efb79dd48990e269ff867fe8f73",
+  "published_at": "2026-09-07T06:16:27Z",
   "assets": {
     "main.js": {
-      "sha256": "103df56260659a0977f45e784f01c6fcb3d811250329c36c150d9de9388a693a",
-      "size": 927849,
-      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.928/main.js"
+      "sha256": "dfe899d73567e6086f8176dda42205185a084b8848d58162f5a9ad3128d5c896",
+      "size": 965567,
+      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.976/main.js"
     },
     "manifest.json": {
-      "sha256": "5eb27249924808e3536331f37090bc407c98e04761f7d3c2c1ab63cebf2300d7",
+      "sha256": "134fdbcf232c59d2c428c236a6342808cac39a714ff507b402c707abc79c31f4",
       "size": 262,
-      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.928/manifest.json"
+      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.976/manifest.json"
     },
     "styles.css": {
       "sha256": "ba292dd704e7547cc279939531121fb1dd7388b760dfa879eb89ee14bb143845",
       "size": 350867,
-      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.928/styles.css"
+      "url": "https://github.com/Gandalf-z/panyipan-plugin-release/releases/download/1.23.0-test.976/styles.css"
     }
   }
 }
